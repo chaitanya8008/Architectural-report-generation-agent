@@ -5700,145 +5700,7 @@ def prepare_qdrant_payload(chunk: dict) -> dict:
     return payload
 
 
-def build_vector_db(
-    chunks: List[dict],
-    collection_name: str,
-    qdrant_path: str,
-    embedding_model: str,
-    genai_provider: str,
-    vertex_location: str,
-    gcp_project_id: str,
-) -> Dict[str, Any]:
-    if not HAS_QDRANT or not HAS_VECTOR or not HAS_FASTEMBED:
-        return {"status": "skipped", "reason": "missing_dependencies"}
-
-    print(f"Building Qdrant collection '{collection_name}'...")
-    qdrant_url = os.getenv("QDRANT_URL")
-    if qdrant_url:
-        qdrant = QdrantClient(url=qdrant_url)
-        print(f"  Using Qdrant at {qdrant_url}")
-    else:
-        qdrant = QdrantClient(path=qdrant_path)
-        print(f"  Using local Qdrant at {qdrant_path}")
-    existing = [collection.name for collection in qdrant.get_collections().collections]
-    if collection_name not in existing:
-        qdrant.create_collection(
-            collection_name=collection_name,
-            vectors_config={"dense": qmodels.VectorParams(size=DENSE_VECTOR_DIM, distance=qmodels.Distance.COSINE)},
-            sparse_vectors_config={"sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)},
-        )
-    else:
-        print(f"  Reusing existing collection '{collection_name}' for incremental upserts...")
-
-    for field in KEYWORD_PAYLOAD_FIELDS:
-        try:
-            qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name=field,
-                field_schema=qmodels.PayloadSchemaType.KEYWORD,
-            )
-        except Exception:
-            pass
-    for field in INTEGER_PAYLOAD_FIELDS:
-        try:
-            qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name=field,
-                field_schema=qmodels.PayloadSchemaType.INTEGER,
-            )
-        except Exception:
-            pass
-    for field in BOOLEAN_PAYLOAD_FIELDS:
-        try:
-            qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name=field,
-                field_schema=qmodels.PayloadSchemaType.BOOL,
-            )
-        except Exception:
-            pass
-
-    sparse_model = SparseTextEmbedding(model_name="Qdrant/bm42-all-minilm-l6-v2-attentions")
-
-    provider = normalize_space(genai_provider).lower() or "vertexai"
-    if provider == "vertexai":
-        dense_embedder = GoogleGenerativeAIEmbeddings(
-            model=embedding_model,
-            location=vertex_location,
-            project=gcp_project_id,
-            vertexai=True,
-        )
-    else:
-        embedder_kwargs: Dict[str, Any] = {"model": embedding_model}
-        google_api_key = os.getenv("GOOGLE_API_KEY", "")
-        if google_api_key:
-            embedder_kwargs["google_api_key"] = google_api_key
-        try:
-            dense_embedder = GoogleGenerativeAIEmbeddings(**embedder_kwargs)
-        except TypeError:
-            # Fallback for library versions that do not accept explicit API-key kwargs.
-            dense_embedder = GoogleGenerativeAIEmbeddings(model=embedding_model)
-
-    texts_to_embed = [chunk.get("text_to_embed") or chunk.get("text") or "" for chunk in chunks]
-    payloads = [prepare_qdrant_payload(chunk) for chunk in chunks]
-    point_ids = [
-        str(uuid_lib.uuid5(uuid_lib.NAMESPACE_URL, make_deterministic_chunk_id(chunk)))
-        for chunk in chunks
-    ]
-
-    print(f"  Generating sparse vectors for {len(chunks)} chunks...")
-    sparse_vectors = list(tqdm(sparse_model.embed(texts_to_embed, batch_size=16), total=len(chunks)))
-
-    dense_batch_size = 5
-    for batch_start in tqdm(range(0, len(chunks), dense_batch_size), desc="Dense embed + upsert"):
-        batch_end = min(batch_start + dense_batch_size, len(chunks))
-        batch_texts = texts_to_embed[batch_start:batch_end]
-        batch_payloads = payloads[batch_start:batch_end]
-        batch_ids = point_ids[batch_start:batch_end]
-        batch_sparse = sparse_vectors[batch_start:batch_end]
-
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                dense_vectors = dense_embedder.embed_documents(batch_texts)
-                if len(dense_vectors) != len(batch_texts):
-                    raise ValueError("Dense embedding count mismatch")
-                break
-            except Exception as exc:
-                if attempt < max_retries - 1:
-                    tqdm.write(f"\n  Waiting 60s after embedding failure: {exc}")
-                    time.sleep(60)
-                else:
-                    raise
-
-        points = [
-            qmodels.PointStruct(
-                id=point_id,
-                vector={
-                    "dense": dense_vector,
-                    "sparse": qmodels.SparseVector(
-                        indices=sparse_vector.indices.tolist(),
-                        values=sparse_vector.values.tolist(),
-                    ),
-                },
-                payload=payload,
-            )
-            for point_id, dense_vector, sparse_vector, payload in zip(
-                batch_ids,
-                dense_vectors,
-                batch_sparse,
-                batch_payloads,
-            )
-        ]
-        qdrant.upsert(collection_name=collection_name, points=points)
-
-    final_count = qdrant.get_collection(collection_name).points_count
-    print(f"  Qdrant build complete: {final_count} points")
-    return {
-        "status": "success",
-        "collection_name": collection_name,
-        "total_documents": len(chunks),
-    }
+# DEPRECATED: build_vector_db is removed. Use push_to_qdrant.py for indexing.
 
 
 def write_json(path: Path, payload: Any):
@@ -5930,7 +5792,7 @@ def main():
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL, help="Embedding model for vector DB")
     parser.add_argument("--vertex-location", default=DEFAULT_VERTEX_LOCATION, help="Vertex AI region")
     parser.add_argument("--skip-db", action="store_true", help="Skip PostgreSQL storage")
-    parser.add_argument("--skip-vectordb", action="store_true", help="Skip Qdrant storage")
+    parser.add_argument("--push-to-qdrant", action="store_true", help="DEPRECATED: Pushes directly to Qdrant. Please use push_to_qdrant.py instead for better performance.")
     parser.add_argument(
         "--verify-mode",
         choices=["auto", "always", "off"],
@@ -6315,18 +6177,11 @@ def main():
         if args.parallel_vision:
             write_json(failure_debug_path, parallel_stats.get("diagnostics", {"message": "no_parallel_diagnostics"}))
 
-        vectordb_stats = {"status": "skipped", "reason": "user_requested"}
-        if not args.skip_vectordb:
-            qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
-            vectordb_stats = build_vector_db(
-                all_chunks,
-                args.collection,
-                qdrant_path,
-                args.embedding_model,
-                genai_provider,
-                args.vertex_location,
-                os.getenv("GCP_PROJECT_ID", ""),
-            )
+        vectordb_stats = {"status": "skipped", "reason": "use_push_to_qdrant_script"}
+        if args.push_to_qdrant:
+            print("\nWARNING: --push-to-qdrant is deprecated and does nothing.")
+            print("To index your chunks, run:")
+            print(f"  python push_to_qdrant.py --chunks {chunks_path}\n")
 
         stats = {
             "project_id": args.project_id,
