@@ -34,7 +34,7 @@ _AGENT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _AGENT_DIR.parent
 _MCP_SERVER_PATH = str(_PROJECT_ROOT / "mcp_server" / "server.py")
 
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 # ── System Prompt ────────────────────────────────────────────────────────────
 

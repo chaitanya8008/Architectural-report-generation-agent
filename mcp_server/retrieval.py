@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -159,7 +160,7 @@ def rerank_chunks_cohere(
         try:
             t_start = time.time()
             chunks_to_rerank = chunks[:rerank_cap]
-            print(f"    🎯 Reranking {len(chunks_to_rerank)} candidates...", end="", flush=True)
+            print(f"    🎯 Reranking {len(chunks_to_rerank)} candidates...", end="", flush=True, file=sys.stderr)
             
             documents = [_get_full_chunk_text(chunk) for chunk in chunks_to_rerank]
 
@@ -182,13 +183,13 @@ def rerank_chunks_cohere(
 
             reranked.sort(key=lambda x: x.get("score", 0), reverse=True)
             elapsed = time.time() - t_start
-            print(f" done in {elapsed:.2f}s")
+            print(f" done in {elapsed:.2f}s", file=sys.stderr)
             return reranked[:top_k]
 
         except Exception as e:
             if "429" in str(e) or "rate_limit" in str(e).lower():
                 wait_time = 60
-                print(f"\n  ⚠️  Cohere rate limit reached. Waiting {wait_time}s before retry...")
+                print(f"\n  ⚠️  Cohere rate limit reached. Waiting {wait_time}s before retry...", file=sys.stderr)
                 time.sleep(wait_time)
                 continue
             
@@ -246,10 +247,10 @@ class HybridRetriever:
 
         if qdrant_url:
             self.qdrant = QdrantClient(url=qdrant_url)
-            print(f"  ✓ Qdrant client initialized (URL: {qdrant_url})")
+            print(f"  ✓ Qdrant client initialized (URL: {qdrant_url})", file=sys.stderr)
         elif qdrant_path:
             self.qdrant = QdrantClient(path=qdrant_path)
-            print(f"  ✓ Qdrant client initialized (Path: {qdrant_path})")
+            print(f"  ✓ Qdrant client initialized (Path: {qdrant_path})", file=sys.stderr)
         else:
             raise ValueError("Either qdrant_url or qdrant_path must be provided.")
 
@@ -260,12 +261,12 @@ class HybridRetriever:
             vertexai=True,
             task_type="retrieval_query",
         )
-        print("  ✓ Dense embedder (Vertex AI) initialized")
+        print("  ✓ Dense embedder (Vertex AI) initialized", file=sys.stderr)
 
         self.sparse_model = SparseTextEmbedding(
             model_name="Qdrant/bm42-all-minilm-l6-v2-attentions"
         )
-        print("  ✓ Sparse embedder (BM42) initialized")
+        print("  ✓ Sparse embedder (BM42) initialized", file=sys.stderr)
 
         # Cohere reranker — optional but strongly recommended
         self.cohere_client = None
@@ -273,11 +274,11 @@ class HybridRetriever:
         if HAS_COHERE and cohere_api_key:
             try:
                 self.cohere_client = cohere.Client(api_key=cohere_api_key)
-                print("  ✓ Cohere reranker initialized")
+                print("  ✓ Cohere reranker initialized", file=sys.stderr)
             except Exception as e:
-                print(f"  ⚠  Cohere initialization failed: {e}")
+                print(f"  ⚠  Cohere initialization failed: {e}", file=sys.stderr)
         else:
-            print("  ⚠  Cohere reranker unavailable — set COHERE_API_KEY to enable")
+            print("  ⚠  Cohere reranker unavailable — set COHERE_API_KEY to enable", file=sys.stderr)
 
     def build_qdrant_filter(self, filters: dict[str, Any]) -> Any | None:
         """Convert filter dict → Qdrant Filter object using correct field names."""
