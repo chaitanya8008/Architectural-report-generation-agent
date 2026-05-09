@@ -28,13 +28,13 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # ── Resolve paths ────────────────────────────────────────────────────────────
 
 _AGENT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _AGENT_DIR.parent
 _MCP_SERVER_PATH = str(_PROJECT_ROOT / "mcp_server" / "server.py")
+
+load_dotenv(_PROJECT_ROOT / ".env")
 
 # ── System Prompt ────────────────────────────────────────────────────────────
 
@@ -231,8 +231,10 @@ def build_agent(
     )
 
     # ── Initialize retriever ──
+    qdrant_url = os.environ.get("QDRANT_URL")
     qdrant_path = str(_PROJECT_ROOT / "qdrant_data")
     retriever = HybridRetriever(
+        qdrant_url=qdrant_url,
         qdrant_path=qdrant_path,
         collection_name=cfg.collection,
         embedding_model=cfg.embedding_model,

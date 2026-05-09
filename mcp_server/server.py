@@ -62,6 +62,7 @@ def _get_retriever():
 
     from retrieval import HybridRetriever
 
+    qdrant_url = os.environ.get("QDRANT_URL")
     qdrant_path = str(_PROJECT_ROOT / "qdrant_data")
     collection_name = os.environ.get("QDRANT_COLLECTION", "VAVA")
     embedding_model = os.environ.get("EMBEDDING_MODEL", "models/text-embedding-004")
@@ -69,10 +70,14 @@ def _get_retriever():
     gcp_project_id = os.environ.get("GCP_PROJECT_ID")
 
     print(f"[MCP] Initializing retrieval engine...", file=sys.stderr)
-    print(f"  Qdrant path: {qdrant_path}", file=sys.stderr)
+    if qdrant_url:
+        print(f"  Qdrant URL: {qdrant_url}", file=sys.stderr)
+    else:
+        print(f"  Qdrant path: {qdrant_path}", file=sys.stderr)
     print(f"  Collection: {collection_name}", file=sys.stderr)
 
     _retriever = HybridRetriever(
+        qdrant_url=qdrant_url,
         qdrant_path=qdrant_path,
         collection_name=collection_name,
         embedding_model=embedding_model,

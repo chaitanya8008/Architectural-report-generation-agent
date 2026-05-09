@@ -18,8 +18,14 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 # pyrefly: ignore [missing-import]
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+
+# ── Resolve paths ────────────────────────────────────────────────────────────
+_AGENT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _AGENT_DIR.parent
+
+load_dotenv(_PROJECT_ROOT / ".env")
 
 from core import load_config
 from agent import build_agent

@@ -124,9 +124,14 @@ args = parser.parse_args()
 
 # ── Handle --repair-indexes mode ─────────────────────────────────────
 if args.repair_indexes:
-    qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
-    print(f"🔧 Repair mode: Adding payload indexes to '{args.collection}' at {qdrant_path}")
-    qdrant = QdrantClient(path=qdrant_path)
+    qdrant_url = os.getenv("QDRANT_URL")
+    if qdrant_url:
+        print(f"🔧 Repair mode: Adding payload indexes to '{args.collection}' at {qdrant_url}")
+        qdrant = QdrantClient(url=qdrant_url)
+    else:
+        qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
+        print(f"🔧 Repair mode: Adding payload indexes to '{args.collection}' at {qdrant_path}")
+        qdrant = QdrantClient(path=qdrant_path)
     create_payload_indexes(qdrant, args.collection)
     info = qdrant.get_collection(args.collection)
     print(f"   Collection has {info.points_count:,} points, {len(info.payload_schema)} indexed fields")
@@ -271,8 +276,14 @@ print("   ✅ Sparse vectors done.\n")
 # ──────────────────────────────────────────────────────────────────────
 # 5. Qdrant setup – clean slate
 # ──────────────────────────────────────────────────────────────────────
-qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
-qdrant = QdrantClient(path=qdrant_path)
+qdrant_url = os.getenv("QDRANT_URL")
+if qdrant_url:
+    print(f"📡 Connecting to Qdrant at {qdrant_url}...")
+    qdrant = QdrantClient(url=qdrant_url)
+else:
+    qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
+    print(f"📂 Using local Qdrant at {qdrant_path}...")
+    qdrant = QdrantClient(path=qdrant_path)
 
 existing = [c.name for c in qdrant.get_collections().collections]
 if collection_name in existing:

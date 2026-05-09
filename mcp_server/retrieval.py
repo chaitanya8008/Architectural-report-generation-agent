@@ -216,7 +216,8 @@ class HybridRetriever:
 
     def __init__(
         self,
-        qdrant_path: str,
+        qdrant_url: str | None = None,
+        qdrant_path: str | None = None,
         collection_name: str = "VAVA",
         embedding_model: str = "models/text-embedding-004",
         vertex_location: str = "asia-south1",
@@ -224,12 +225,13 @@ class HybridRetriever:
     ):
         self.collection_name = collection_name
         self._init_clients(
-            qdrant_path, embedding_model, vertex_location, gcp_project_id
+            qdrant_url, qdrant_path, embedding_model, vertex_location, gcp_project_id
         )
 
     def _init_clients(
         self,
-        qdrant_path: str,
+        qdrant_url: str | None,
+        qdrant_path: str | None,
         embedding_model: str,
         vertex_location: str,
         gcp_project_id: str | None,
@@ -242,8 +244,14 @@ class HybridRetriever:
         if not HAS_DENSE:
             raise RuntimeError("langchain-google-genai not installed.")
 
-        self.qdrant = QdrantClient(path=qdrant_path)
-        print("  ✓ Qdrant client initialized")
+        if qdrant_url:
+            self.qdrant = QdrantClient(url=qdrant_url)
+            print(f"  ✓ Qdrant client initialized (URL: {qdrant_url})")
+        elif qdrant_path:
+            self.qdrant = QdrantClient(path=qdrant_path)
+            print(f"  ✓ Qdrant client initialized (Path: {qdrant_path})")
+        else:
+            raise ValueError("Either qdrant_url or qdrant_path must be provided.")
 
         self.dense_embedder = GoogleGenerativeAIEmbeddings(
             model=embedding_model,

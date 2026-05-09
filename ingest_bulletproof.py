@@ -5713,7 +5713,13 @@ def build_vector_db(
         return {"status": "skipped", "reason": "missing_dependencies"}
 
     print(f"Building Qdrant collection '{collection_name}'...")
-    qdrant = QdrantClient(path=qdrant_path)
+    qdrant_url = os.getenv("QDRANT_URL")
+    if qdrant_url:
+        qdrant = QdrantClient(url=qdrant_url)
+        print(f"  Using Qdrant at {qdrant_url}")
+    else:
+        qdrant = QdrantClient(path=qdrant_path)
+        print(f"  Using local Qdrant at {qdrant_path}")
     existing = [collection.name for collection in qdrant.get_collections().collections]
     if collection_name not in existing:
         qdrant.create_collection(
