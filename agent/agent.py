@@ -188,6 +188,7 @@ def _load_filter_reference() -> str:
 def build_agent(
     cfg: "AgentConfig",
     checkpointer: Any = None,
+    system_prompt: str | None = None,
     **kwargs,
 ):
     """
@@ -200,6 +201,7 @@ def build_agent(
     Args:
         cfg: Agent configuration
         checkpointer: Optional LangGraph checkpointer for conversation persistence
+        system_prompt: Optional custom persona (defaults to SYSTEM_PROMPT)
         **kwargs: Passed to create_react_agent
 
     Returns:
@@ -313,6 +315,7 @@ def build_agent(
         document_class: str = "",
         assembly_id: str = "",
         source_file_name: str = "",
+        exhaustive: bool = False,
         limit: int = 60,
     ) -> str:
         """Hybrid semantic + keyword search over project documents.
@@ -335,6 +338,7 @@ def build_agent(
             document_class: Document type filter. "text_native" for reports/specs, "unknown" for drawings
             assembly_id: Specific assembly or partition ID. e.g. "KS", "PS", "FA4", "RA5", "HA"
             source_file_name: Source PDF file name filter. e.g. "2025.04.01_50% DD.pdf" for acoustic report
+            exhaustive: If true, performs a non-semantic metadata-only scroll to guarantee 100% data coverage of a section. Use for reports.
             limit: Max results (default 20, max 60)
         """
         if not query or not query.strip():
@@ -342,6 +346,9 @@ def build_agent(
 
         limit = max(1, min(limit, 120))
         filters: dict = {}
+
+        if exhaustive:
+            filters["exhaustive"] = True
 
         def _parse_list(value: str) -> list[str] | None:
             if not value or not value.strip():
@@ -379,12 +386,18 @@ def build_agent(
             filters["source_file_name"] = source_file_name.strip()
 
         try:
-            result = retriever.search(query=query, filters=filters, k=limit)
+            if filters and filters.get("exhaustive"):
+                # Clean up filters dict to remove the flag
+                clean_filters = {k: v for k, v in filters.items() if k != "exhaustive"}
+                chunks = retriever.scroll_all(filters=clean_filters, limit=2000)
+                stats = {"query": query, "exhaustive": True, "returned": len(chunks), "filters": clean_filters}
+                hits = chunks
+            else:
+                result = retriever.search(query=query, filters=filters, k=limit)
+                hits = result["hits"]
+                stats = result["stats"]
         except Exception as e:
             return f"ERROR: Search failed: {e}"
-
-        hits = result["hits"]
-        stats = result["stats"]
 
         parts = [
             f"### Search Results ({len(hits)} hits)\n"
@@ -486,11 +499,182 @@ def build_agent(
 
         return "\n".join(parts)
 
+    @tool
+    def list_document_map(filters: dict[str, Any] | None = None) -> str:
+        """
+        Retrieves a complete map of the project's documents, sheets, and sections.
+        Use this BEFORE generating reports to understand the project structure
+        and plan which sections need exhaustive retrieval.
+
+        Args:
+            filters: Optional filters (e.g. {"discipline": "architectural"})
+        """
+        try:
+            res = retriever.get_document_map(filters=filters)
+            
+            output = [
+                f"## Project Document Map",
+                f"Total Sheets: {res['total_sheets']}",
+                f"Generated at: {res['generated_at']}\n",
+                "| Sheet | Title | Section | Chunks |",
+                "|-------|-------|---------|--------|"
+            ]
+            
+            for sheet in res["sheets"]:
+                s_num = sheet["sheet_number"]
+                s_title = (sheet["sheet_title"] or "")[:30]
+                for i, sec in enumerate(sheet["sections"]):
+                    disp_num = s_num if i == 0 else ""
+                    disp_title = s_title if i == 0 else ""
+                    output.append(f"| {disp_num} | {disp_title} | {sec['heading']} | {sec['chunk_count']} |")
+            
+            return "\n".join(output)
+            
+        except Exception as e:
+            return f"ERROR: Failed to list document map: {e}"
+
+    @tool
+    def acoustic_calculator(operation: str, params: dict) -> str:
+        """
+        Performs deterministic acoustic engineering calculations.
+        Operations:
+          - compute_composite_stc: params={'area_stc_pairs': [[area1, stc1], [area2, stc2]]}
+          - compute_noise_reduction: params={'area': float, 'stc': float, 'sabines': float}
+          - rt60_sabine: params={'volume': float, 'total_sabines': float}
+          - weighted_nrc: params={'area_nrc_pairs': [[area1, nrc1], [area2, nrc2]]}
+          - flanking_factor: params={'base_stc': float, 'construction_type': 'wood'|'concrete'|'steel'}
+          - compare_rating: params={'required': float, 'actual': float}
+        """
+        import math
+        try:
+            if operation == "compute_composite_stc":
+                pairs = params.get("area_stc_pairs", [])
+                total_area = sum(p[0] for p in pairs)
+                if total_area == 0: return "Error: Total area is zero"
+                total_transmission = sum(p[0] * (10**(-p[1]/10)) for p in pairs)
+                avg_transmission = total_transmission / total_area
+                composite_stc = -10 * math.log10(avg_transmission)
+                return f"Composite STC: {composite_stc:.1f} (Total Area: {total_area})"
+
+            elif operation == "compute_noise_reduction":
+                a, stc, s = params.get("area"), params.get("stc"), params.get("sabines")
+                if not all([a, stc, s]): return "Error: Missing parameters"
+                nr = stc + 10 * math.log10(s/a)
+                return f"Noise Reduction (NR): {nr:.1f} dB"
+
+            elif operation == "rt60_sabine":
+                v, s = params.get("volume"), params.get("total_sabines")
+                if s == 0: return "Error: Sabines cannot be zero"
+                rt60 = 0.049 * v / s
+                return f"RT60 Estimate: {rt60:.2f} seconds"
+
+            elif operation == "weighted_nrc":
+                pairs = params.get("area_nrc_pairs", [])
+                total_area = sum(p[0] for p in pairs)
+                if total_area == 0: return "Error: Total area is zero"
+                avg_nrc = sum(p[0] * p[1] for p in pairs) / total_area
+                return f"Weighted NRC: {avg_nrc:.2f}"
+
+            elif operation == "flanking_factor":
+                stc = params.get("base_stc", 0)
+                ctype = params.get("construction_type", "concrete")
+                reduction = 5 if ctype == "wood" else 2
+                return f"Field STC Estimate: {stc - reduction} (Base: {stc}, Flanking Margin: -{reduction})"
+
+            elif operation == "compare_rating":
+                req, act = params.get("required"), params.get("actual")
+                diff = act - req
+                status = "PASS" if diff >= 0 else "FAIL"
+                margin = "critical" if -3 < diff < 3 else "safe"
+                return f"Comparison: {status} (Actual: {act}, Required: {req}, Diff: {diff:.1f}, Margin: {margin})"
+            
+            return f"Error: Unknown operation {operation}"
+        except Exception as e:
+            return f"ERROR: Calculation failed: {e}"
+
+    # ── Tool E: Cross-Reference Tracker (Shared State) ──
+    # We use a closure-scoped dictionary to persist data during the session
+    assembly_ledger: dict[str, dict] = {}
+
+    @tool
+    def cross_reference_tracker(action: str, assembly_id: str = "", data: dict | None = None) -> str:
+        """
+        Manages shared assembly knowledge between different report sections.
+        Use this to ensure 'Partition JA' means the same thing across HVAC and Architectural sections.
+        
+        Actions:
+          - register: data={'rating': 'STC 50', 'description': '...', 'source_sheet': 'A8.01'}
+          - lookup: assembly_id='JA'
+          - list_all: returns the entire ledger
+        """
+        if action == "register":
+            if not assembly_id: return "Error: assembly_id required for registration"
+            assembly_ledger[assembly_id.upper()] = data or {}
+            return f"Success: Registered Assembly {assembly_id.upper()}"
+        
+        elif action == "lookup":
+            res = assembly_ledger.get(assembly_id.upper())
+            if not res: return f"Note: No data found in ledger for Assembly {assembly_id.upper()}"
+            return json.dumps(res, indent=2)
+            
+        elif action == "list_all":
+            if not assembly_ledger: return "The ledger is currently empty."
+            return json.dumps(assembly_ledger, indent=2)
+            
+        return f"Error: Unknown action {action}"
+
+    # ── Tool C: Cross-Scope Sweep (Safety Net) ──
+    @tool
+    def cross_scope_sweep(already_read_ids: list[str], filters: dict[str, Any] | None = None) -> str:
+        """
+        Scans a portion of the project for chunks that were NOT already retrieved.
+        Use this at the end of report generation to catch mis-tagged chunks in other areas.
+        
+        Args:
+            already_read_ids: List of chunk_ids already processed/cited by the agent.
+            filters: Optional filters to narrow the sweep (e.g. {"discipline": "structural"})
+        """
+        try:
+            # Scroll with a smaller batch to be memory-safe
+            all_chunks = retriever.scroll_all(filters=filters or {}, limit=1000)
+            
+            unread = [c for c in all_chunks if c.get("chunk_id") not in already_read_ids]
+            
+            keywords = ["STC", "NRC", "IIC", "NC", "SABINE", "SOUND", "ACOUSTIC", "NC-", "RT60"]
+            anomalies = []
+            
+            for chunk in unread:
+                text_upper = chunk.get("text", "").upper()
+                if any(kw in text_upper for kw in keywords):
+                    anomalies.append(chunk)
+            
+            if not anomalies:
+                return f"Sweep Complete ({filters or 'All'}): No missed acoustic data found."
+            
+            parts = [f"## SWEEP ALERT: Found {len(anomalies)} missed chunks in {filters or 'All'}!\n"]
+            for i, chunk in enumerate(anomalies[:10], 1):
+                parts.append(f"**[{i}]** `{chunk.get('source_path')}` (Sheet: {chunk.get('sheet_number')})")
+                parts.append(f"Text: {chunk.get('text')[:200]}...\n")
+            
+            return "\n".join(parts)
+            
+        except Exception as e:
+            return f"ERROR: Sweep failed: {e}"
+
     # ── Build the agent ──
-    tools = [list_available_filters, search_documents, get_sheet_contents]
+    tools = [
+        list_available_filters, 
+        search_documents, 
+        get_sheet_contents, 
+        list_document_map, 
+        acoustic_calculator,
+        cross_reference_tracker,
+        cross_scope_sweep
+    ]
     
-    # Build final system prompt with filter reference
-    full_prompt = SYSTEM_PROMPT + _load_filter_reference()
+    # Use custom system prompt if provided, otherwise default to SYSTEM_PROMPT
+    base_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+    full_prompt = base_prompt + _load_filter_reference()
     
     # Build ReAct agent
     agent = create_react_agent(

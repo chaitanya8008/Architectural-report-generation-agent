@@ -399,9 +399,12 @@ class HybridRetriever:
         }
 
     def scroll_all(
-        self, filters: dict[str, Any], limit: int = 2000
+        self, filters: dict[str, Any], limit: int = 5000
     ) -> list[dict[str, Any]]:
-        """Retrieve ALL chunks matching filters (no vector search)."""
+        """
+        Retrieve ALL chunks matching filters (no vector search).
+        Guarantees 100% coverage within the filtered scope.
+        """
         qdrant_filter = self.build_qdrant_filter(filters)
 
         all_points: list[dict[str, Any]] = []
@@ -421,4 +424,71 @@ class HybridRetriever:
                 break
             offset = next_offset
 
+        # Order by sheet and page to preserve document flow
+        all_points.sort(key=lambda x: (x.get("sheet_number", ""), x.get("page_number", 0)))
         return all_points
+
+    def get_document_map(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """
+        Build a structural map of the project (Sheet -> Section -> Chunk Count).
+        Used by report agents to plan their exhaustive retrieval.
+        """
+        qdrant_filter = self.build_qdrant_filter(filters or {})
+        
+        # We scroll through everything but only request the metadata we need to save bandwidth
+        doc_tree = {}
+        offset = None
+        
+        while True:
+            results, next_offset = self.qdrant.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qdrant_filter,
+                limit=500,
+                offset=offset,
+                with_payload=["sheet_number", "sheet_title", "section_name", "discipline", "document_id"],
+                with_vectors=False,
+            )
+            
+            for pt in results:
+                payload = pt.payload
+                sheet = payload.get("sheet_number", "Unknown")
+                section = payload.get("section_name", "General") or "General"
+                doc_id = payload.get("document_id", "")
+                
+                if sheet not in doc_tree:
+                    doc_tree[sheet] = {
+                        "sheet_number": sheet,
+                        "sheet_title": payload.get("sheet_title", ""),
+                        "document_id": doc_id,
+                        "sections": {}
+                    }
+                
+                if section not in doc_tree[sheet]["sections"]:
+                    doc_tree[sheet]["sections"][section] = {
+                        "heading": section,
+                        "chunk_count": 0,
+                        "filters": {
+                            ** (filters or {}),
+                            "sheet_number": sheet,
+                            "section_name": section
+                        }
+                    }
+                doc_tree[sheet]["sections"][section]["chunk_count"] += 1
+                
+            if next_offset is None:
+                break
+            offset = next_offset
+            
+        # Convert dict tree to a clean list for the agent
+        formatted_sheets = []
+        for sheet_data in doc_tree.values():
+            sheet_data["sections"] = list(sheet_data["sections"].values())
+            formatted_sheets.append(sheet_data)
+            
+        formatted_sheets.sort(key=lambda x: x["sheet_number"])
+        
+        return {
+            "sheets": formatted_sheets,
+            "total_sheets": len(formatted_sheets),
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")
+        }

@@ -39,6 +39,7 @@ KEYWORD_INDEX_FIELDS = [
     "entity_type", "entity_id", "entity_name", "page_class",
     "source_file_name", "retrieval_scope", "extraction_strategy",
     "rating_type", "assembly_id", "room_id", "semantic_unit_type",
+    "section_name",
 ]
 BOOLEAN_INDEX_FIELDS = ["is_current_revision", "quarantined", "low_confidence_extraction"]
 INTEGER_INDEX_FIELDS = ["page_number", "revision_sequence", "block_index"]
@@ -48,7 +49,7 @@ FILTERABLE_KEYWORD_FIELDS = [
     "project_id", "revision_label", "discipline", "chunk_type",
     "page_class", "document_class", "sheet_number", "entity_type",
     "drawing_type", "retrieval_scope", "rating_type", "assembly_id",
-    "source_file_name", "semantic_unit_type",
+    "source_file_name", "semantic_unit_type", "section_name",
 ]
 FILTERABLE_BOOLEAN_FIELDS = ["is_current_revision", "quarantined", "low_confidence_extraction"]
 

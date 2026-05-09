@@ -26,6 +26,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState('fast'); // 'fast' or 'pro'
   const [stats, setStats] = useState({ chunks: 113798, latency: "0.43s", status: "Ready", index_date: "2026-05-09" });
   const [threadId] = useState(() => Math.random().toString(36).substring(7));
   
@@ -64,7 +65,11 @@ function App() {
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, thread_id: threadId }),
+        body: JSON.stringify({ 
+          message: userMessage, 
+          thread_id: threadId,
+          mode: mode 
+        }),
       });
 
       const reader = response.body.getReader();
@@ -107,6 +112,9 @@ function App() {
             setIsThinking(false);
             assistantText += data;
             setCurrentAssistantMessage(assistantText);
+          } else if (eventType === 'status') {
+            setLastThought(data); // Reuse thought field for status updates
+            setIsThinking(true);
           } else if (eventType === 'thought') {
             setLastThought(data);
           } else if (eventType === 'tool') {
@@ -246,6 +254,21 @@ function App() {
                 <Cpu size={20} color="#fff" />
               </div>
               <div className="logo-text">AcoustiQ <span style={{opacity: 0.4, fontWeight: 400}}>PRO</span></div>
+            </div>
+
+            <div className="mode-toggle">
+              <button 
+                className={`mode-btn ${mode === 'fast' ? 'active' : ''}`}
+                onClick={() => setMode('fast')}
+              >
+                <Activity size={14} /> Fast
+              </button>
+              <button 
+                className={`mode-btn ${mode === 'pro' ? 'active' : ''}`}
+                onClick={() => setMode('pro')}
+              >
+                <Bot size={14} /> Pro
+              </button>
             </div>
           </header>
 
