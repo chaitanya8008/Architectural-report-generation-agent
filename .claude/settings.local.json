@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"D:\\\\VA_Phase1_v3\")"
+    ]
+  }
+}

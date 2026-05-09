@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+.venv311/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Large Binary Files (PDFs, etc.)
+1040-025 Dayton Hotel/
+*.pdf
+*.docx
+*.xlsx
+*.eml
+
+# Database Files
+chroma_db/
+*.sqlite3
+*.db
+
+# Data Files
+ingestion_outputs/
+*.ndjson
+*.zip
+
+# Site-packages
+Lib/
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+
+# Benchmark results
+agent/agent_results.json
+agent/benchmark_results*.json
+agent/chunks_for_latest.json
+
+# Project Specific Data
+qdrant_data/
+tmp_runs/
+agent/context/
+
+# Specific Virtual Environments
+myvenv/
+.myvenv/
+
+

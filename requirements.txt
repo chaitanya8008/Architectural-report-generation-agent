@@ -1,0 +1,16 @@
+langgraph>=0.2.35
+langchain-core>=1.0.0
+langchain>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-mcp-adapters>=0.2.0
+pydantic>=2.8.2
+google-genai>=1.0.0
+cohere>=5.0.0
+mcp[cli]
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+qdrant-client
+fastembed
+streamlit
