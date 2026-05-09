@@ -279,7 +279,7 @@ function App() {
                           {isThinking && (
                             <div className="process-indicator">
                               <div className="process-line"><div className="process-line-active"></div></div>
-                              <div className="process-info"><span>Syncing</span>{toolSteps.length > 0 && <span className="tool-badge"><Search size={10} /> {toolSteps[toolSteps.length-1].name}</span>}</div>
+                              <div className="process-info"><span>Thinking</span>{toolSteps.length > 0 && <span className="tool-badge"><Search size={10} /> {toolSteps[toolSteps.length-1].name}</span>}</div>
                               {lastThought && <div className="thought-snippet">{lastThought}</div>}
                             </div>
                           )}

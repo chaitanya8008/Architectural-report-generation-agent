@@ -1,0 +1,25 @@
+{
+    "include": [
+        ".",
+        "agent",
+        "mcp_server"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "myvenv"
+    ],
+    "venvPath": ".",
+    "venv": "myvenv",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "extraPaths": [
+                "./agent",
+                "./mcp_server"
+            ]
+        }
+    ],
+    "reportMissingImports": true,
+    "typeCheckingMode": "basic"
+}

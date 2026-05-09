@@ -51,6 +51,7 @@ body {
   display: flex;
   flex-direction: column;
   padding: 1.5rem 2rem;
+  min-height: 0;
 }
 
 /* ── Sidebar ────────────────────────────────────────────────────── */
@@ -145,11 +146,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
-  scrollbar-width: none;
+  min-height: 0; /* Important for flex-grow containers with overflow */
 }
 
-.chat-window::-webkit-scrollbar { width: 2px; }
-.chat-window::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 10px; }
+.chat-window::-webkit-scrollbar { width: 6px; }
+.chat-window::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.2); border-radius: 10px; }
+.chat-window::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.4); }
 
 .message-row { display: flex; gap: 1rem; width: 100%; margin-bottom: 0.5rem; }
 .message-row.user { flex-direction: row-reverse; }
