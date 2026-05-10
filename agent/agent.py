@@ -801,7 +801,11 @@ def _build_shared_components(cfg: "AgentConfig"):
             exhaustive: If true, performs a non-semantic metadata-only scroll to guarantee 100% data coverage of a section. Use for reports.
             limit: Max results (default 20, max 60)
         """
-        print(f"   [TOOL: Search] Query: \"{query}\"")
+        active_kwargs = {k: v for k, v in locals().items() if k not in ('query', 'limit') and v}
+        log_msg = f"   [TOOL: Search] Query: \"{query}\""
+        if active_kwargs:
+            log_msg += f" | Args: {active_kwargs}"
+        print(log_msg)
         if not query or not query.strip():
             return "ERROR: query parameter is required."
         limit = max(1, min(limit, 120))
