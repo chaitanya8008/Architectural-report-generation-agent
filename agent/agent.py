@@ -738,31 +738,58 @@ def _build_shared_components(cfg: "AgentConfig"):
     # ── Define all tools (closures over shared retriever) ──
     @tool
     def list_available_filters() -> str:
-        """Returns all filterable fields, their valid values, and descriptions for the loaded project.
-        Call this to understand what filters you can apply to search_documents.
-        Each filter includes a description of what it does and a usage_hint with examples."""
+        """Returns a compact summary of all filterable fields for the loaded project.
+        Call this to discover what filters you can apply to search_documents.
+        Fields with few values are listed in full. Fields with many values show a count and sample."""
         if not filter_registry:
             return "No filter registry available. Run push_to_qdrant.py to generate it."
-        output = {"total_chunks": filter_registry.get("total_chunks", 0), "filters": {}}
+
         available = filter_registry.get("available_filters", {})
-        skip_fields = {"project_id", "quarantined", "low_confidence_extraction", "retrieval_scope"}
+        # Fields to skip (internal/irrelevant to the agent)
+        skip_fields = {
+            "project_id", "quarantined", "low_confidence_extraction",
+            "retrieval_scope", "extraction_strategy", "extraction_source",
+            "document_family_id", "revision_id", "document_id",
+        }
+        # High-priority fields the agent uses most — show these first
+        priority_fields = [
+            "chunk_type", "discipline", "page_class", "block_type",
+            "entity_type", "rating_type", "sheet_number", "assembly_id",
+            "revision_label", "document_class", "source_file_name",
+        ]
+
+        output = {"total_chunks": filter_registry.get("total_chunks", 0), "filters": {}}
+
+        # Process priority fields first, then any remaining
+        seen = set()
+        for field in priority_fields:
+            if field in available and field not in skip_fields:
+                seen.add(field)
+                values = available[field]
+                output["filters"][field] = _summarize_field(field, values, filter_descriptions)
+
         for field, values in available.items():
-            if field in skip_fields:
-                continue
-            entry = {}
-            desc_info = filter_descriptions.get(field, {})
-            if desc_info:
-                entry["description"] = desc_info.get("description", "")
-                entry["usage_hint"] = desc_info.get("usage_hint", "")
-            if isinstance(values, list) and len(values) <= 30:
-                entry["values"] = values
-            elif isinstance(values, list):
-                entry["total_values"] = len(values)
-                entry["sample_values"] = values[:15]
-            else:
-                entry["values"] = values
-            output["filters"][field] = entry
+            if field not in seen and field not in skip_fields:
+                output["filters"][field] = _summarize_field(field, values, filter_descriptions)
+
         return json.dumps(output, indent=2, ensure_ascii=False)
+
+    def _summarize_field(field: str, values, descriptions: dict) -> dict:
+        """Create a compact summary for a single filter field."""
+        entry = {}
+        desc_info = descriptions.get(field, {})
+        if desc_info:
+            entry["description"] = desc_info.get("description", "")
+        if isinstance(values, list):
+            if len(values) <= 15:
+                entry["values"] = values
+            else:
+                entry["total_values"] = len(values)
+                entry["sample"] = values[:8]
+                entry["note"] = f"{len(values)} total values — use search to find specific ones"
+        else:
+            entry["values"] = values
+        return entry
 
     @tool
     def search_documents(
