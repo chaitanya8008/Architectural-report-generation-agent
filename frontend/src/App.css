@@ -314,11 +314,15 @@ body {
 }
 
 /* ── Minimalist Process Indicator ────────────────────────────────── */
-.process-indicator { margin-bottom: 0.8rem; width: 100%; }
-.process-line { height: 1px; background: rgba(99, 102, 241, 0.15); position: relative; overflow: hidden; border-radius: 1px; margin-bottom: 0.4rem; }
-.process-line-active { position: absolute; height: 100%; width: 30%; background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: glide 2s ease-in-out infinite; }
-.process-info { display: flex; align-items: center; gap: 0.6rem; font-size: 0.7rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
-.thought-snippet { font-size: 0.75rem; color: var(--text-dim); font-style: italic; margin-top: 0.2rem; line-height: 1.4; }
+.process-indicator { 
+  margin-bottom: 1.2rem; 
+  width: 100%; 
+  padding: 0.5rem 0;
+}
+.process-line { height: 2px; background: rgba(99, 102, 241, 0.1); position: relative; overflow: hidden; border-radius: 2px; margin-bottom: 0.6rem; }
+.process-line-active { position: absolute; height: 100%; width: 40%; background: var(--accent); box-shadow: 0 0 15px var(--accent); animation: glide 2s ease-in-out infinite; }
+.process-info { display: flex; align-items: center; gap: 0.8rem; font-size: 0.75rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.12em; font-family: 'JetBrains Mono', monospace; }
+.thought-snippet { font-size: 0.8rem; color: var(--text-dim); font-style: italic; margin-top: 0.4rem; line-height: 1.5; padding-left: 2px; border-left: 2px solid var(--glass-border); margin-left: 2px; padding: 0.5rem 0 0.5rem 1rem; }
 .tool-badge { font-size: 0.65rem; color: #10b981; display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 1rem; }
 
 @keyframes glide { 0% { left: -30%; } 100% { left: 130%; } }

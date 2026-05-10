@@ -451,8 +451,9 @@ class HybridRetriever:
             
             for pt in results:
                 payload = pt.payload
-                sheet = payload.get("sheet_number", "Unknown")
-                section = payload.get("section_name", "General") or "General"
+                # Ensure sheet is always a string (avoid NoneType comparison during sort)
+                sheet = payload.get("sheet_number") or "Unknown"
+                section = payload.get("section_name") or "General"
                 doc_id = payload.get("document_id", "")
                 
                 if sheet not in doc_tree:

@@ -36,5 +36,7 @@ class ReportState(TypedDict):
     
     # ── Current Focus ──
     # The current task assigned by the Boss Agent
+    document_map: str
+    user_request: str
     current_task: str
     next_agent: str
