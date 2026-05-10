@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+from langchain_core.runnables import RunnableConfig
 
 # ── Resolve paths ────────────────────────────────────────────────────────────
 
@@ -709,38 +710,76 @@ def _build_shared_components(cfg: "AgentConfig"):
 
     from retrieval import HybridRetriever
 
-    # ── Initialize retriever ONCE ──
-    retriever = HybridRetriever(
-        qdrant_url=os.environ.get("QDRANT_URL"),
-        qdrant_path=str(_PROJECT_ROOT / "qdrant_data"),
-        collection_name=cfg.collection,
-        embedding_model=cfg.embedding_model,
-        vertex_location=os.environ.get("VERTEX_LOCATION", "asia-south1"),
-        gcp_project_id=os.environ.get("GCP_PROJECT_ID"),
-    )
+    # ── Cache for project-specific resources (Lazy-init) ──
+    resource_cache: Dict[str, Any] = {}
 
-    # ── Load filter registry ONCE ──
-    registry_path = _PROJECT_ROOT / "filter_registry.json"
-    filter_registry = {}
-    if registry_path.exists():
-        with open(registry_path, "r", encoding="utf-8") as f:
-            filter_registry = json.load(f)
+    def get_resources(config: RunnableConfig):
+        """Helper to load/get project-specific retriever and registry."""
+        project_id = config.get("configurable", {}).get("project_id", cfg.collection)
+        
+        if project_id in resource_cache:
+            return resource_cache[project_id]
 
-    desc_path = _PROJECT_ROOT / "agent" / "filter_descriptions.json"
-    filter_descriptions = {}
-    if desc_path.exists():
-        with open(desc_path, "r", encoding="utf-8") as f:
-            filter_descriptions = json.load(f).get("filter_descriptions", {})
+        # ── Initialize project-specific retriever ──
+        p_retriever = HybridRetriever(
+            qdrant_url=os.environ.get("QDRANT_URL"),
+            qdrant_path=str(_PROJECT_ROOT / "qdrant_data"),
+            collection_name=project_id,
+            embedding_model=cfg.embedding_model,
+            vertex_location=os.environ.get("VERTEX_LOCATION", "asia-south1"),
+            gcp_project_id=os.environ.get("GCP_PROJECT_ID"),
+        )
+
+        # ── Load project-specific filter registry ──
+        reg_dir = _PROJECT_ROOT / "filter_registries" / project_id
+        registry_path = reg_dir / f"{project_id}_registry.json"
+        
+        # Fallback to root filter_registry.json for legacy support
+        if not registry_path.exists():
+            registry_path = _PROJECT_ROOT / "filter_registry.json"
+
+        p_filter_registry = {}
+        if registry_path.exists():
+            try:
+                with open(registry_path, "r", encoding="utf-8") as f:
+                    p_filter_registry = json.load(f)
+            except Exception as e:
+                print(f"WARNING: could not load registry at {registry_path}: {e}")
+
+        # ── Load project-specific descriptions ──
+        desc_path = reg_dir / f"{project_id}_descriptions.json"
+        if not desc_path.exists():
+             desc_path = _PROJECT_ROOT / "agent" / "filter_descriptions.json"
+
+        p_filter_descriptions = {}
+        if desc_path.exists():
+            try:
+                with open(desc_path, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+                    p_filter_descriptions = content.get("filter_descriptions", content)
+            except Exception as e:
+                print(f"WARNING: could not load descriptions at {desc_path}: {e}")
+
+        resource_cache[project_id] = {
+            "retriever": p_retriever,
+            "filter_registry": p_filter_registry,
+            "filter_descriptions": p_filter_descriptions
+        }
+        return resource_cache[project_id]
 
     # ── Shared assembly ledger ──
     assembly_ledger: dict[str, dict] = {}
 
     # ── Define all tools (closures over shared retriever) ──
     @tool
-    def list_available_filters() -> str:
+    def list_available_filters(config: RunnableConfig) -> str:
         """Returns a compact summary of all filterable fields for the loaded project.
         Call this to discover what filters you can apply to search_documents.
         Fields with few values are listed in full. Fields with many values show a count and sample."""
+        resources = get_resources(config)
+        filter_registry = resources["filter_registry"]
+        filter_descriptions = resources["filter_descriptions"]
+
         if not filter_registry:
             return "No filter registry available. Run push_to_qdrant.py to generate it."
 
@@ -807,6 +846,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         source_file_name: str = "",
         exhaustive: bool = False,
         limit: int = 60,
+        config: Optional[RunnableConfig] = None,
     ) -> str:
         """Hybrid semantic + keyword search over project documents.
         Combines dense embeddings with sparse BM42 keyword matching via RRF,
@@ -828,7 +868,10 @@ def _build_shared_components(cfg: "AgentConfig"):
             exhaustive: If true, performs a non-semantic metadata-only scroll to guarantee 100% data coverage of a section. Use for reports.
             limit: Max results (default 20, max 60)
         """
-        active_kwargs = {k: v for k, v in locals().items() if k not in ('query', 'limit') and v}
+        resources = get_resources(config or {})
+        p_retriever = resources["retriever"]
+
+        active_kwargs = {k: v for k, v in locals().items() if k not in ('query', 'limit', 'config', 'resources', 'p_retriever') and v}
         log_msg = f"   [TOOL: Search] Query: \"{query}\""
         if active_kwargs:
             log_msg += f" | Args: {active_kwargs}"
@@ -864,11 +907,11 @@ def _build_shared_components(cfg: "AgentConfig"):
         try:
             if filters and filters.get("exhaustive"):
                 clean_filters = {k: v for k, v in filters.items() if k != "exhaustive"}
-                chunks = retriever.scroll_all(filters=clean_filters, limit=2000)
+                chunks = p_retriever.scroll_all(filters=clean_filters, limit=2000)
                 stats = {"query": query, "exhaustive": True, "returned": len(chunks), "filters": clean_filters}
                 hits = chunks
             else:
-                result = retriever.search(query=query, filters=filters, k=limit)
+                result = p_retriever.search(query=query, filters=filters, k=limit)
                 hits = result["hits"]
                 stats = result["stats"]
         except Exception as e:
@@ -897,7 +940,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         return "\n\n".join(parts)
 
     @tool
-    def get_sheet_contents(sheet_number: str, revision_label: str = "") -> str:
+    def get_sheet_contents(sheet_number: str, revision_label: str = "", config: Optional[RunnableConfig] = None) -> str:
         """Retrieve ALL chunks for a specific sheet number.
         Use when the user asks 'what is on sheet X?' or wants comprehensive sheet-level information.
         Args:
@@ -907,11 +950,13 @@ def _build_shared_components(cfg: "AgentConfig"):
         print(f"   [TOOL: Sheet] Sheet: \"{sheet_number}\"")
         if not sheet_number or not sheet_number.strip():
             return "ERROR: sheet_number is required."
+        resources = get_resources(config or {})
+        p_retriever = resources["retriever"]
         filters = {"sheet_number": sheet_number.strip()}
         if revision_label and revision_label.strip():
             filters["revision_label"] = revision_label.strip()
         try:
-            chunks = retriever.scroll_all(filters=filters, limit=500)
+            chunks = p_retriever.scroll_all(filters=filters, limit=500)
         except Exception as e:
             return f"ERROR: Failed to retrieve sheet contents: {e}"
         if not chunks:
@@ -956,7 +1001,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         return "\n".join(parts)
 
     @tool
-    def list_document_map(filters: dict[str, Any] | None = None) -> str:
+    def list_document_map(filters: dict[str, Any] | None = None, config: Optional[RunnableConfig] = None) -> str:
         """Retrieves a complete map of the project's documents, sheets, and sections.
         Use this BEFORE generating reports to understand the project structure
         and plan which sections need exhaustive retrieval.
@@ -964,8 +1009,10 @@ def _build_shared_components(cfg: "AgentConfig"):
             filters: Optional filters (e.g. {"discipline": "architectural"})
         """
         print(f"   [TOOL: DocMap] Fetching project structure...")
+        resources = get_resources(config or {})
+        p_retriever = resources["retriever"]
         try:
-            res = retriever.get_document_map(filters=filters)
+            res = p_retriever.get_document_map(filters=filters)
             output = [
                 f"## Project Document Map",
                 f"Total Sheets: {res['total_sheets']}",
@@ -1057,15 +1104,17 @@ def _build_shared_components(cfg: "AgentConfig"):
         return f"Error: Unknown action {action}"
 
     @tool
-    def cross_scope_sweep(already_read_ids: list[str], filters: dict[str, Any] | None = None) -> str:
+    def cross_scope_sweep(already_read_ids: list[str], filters: dict[str, Any] | None = None, config: Optional[RunnableConfig] = None) -> str:
         """Scans a portion of the project for chunks that were NOT already retrieved.
         Use this at the end of report generation to catch mis-tagged chunks in other areas.
         Args:
             already_read_ids: List of chunk_ids already processed/cited by the agent.
             filters: Optional filters to narrow the sweep (e.g. {"discipline": "structural"})
         """
+        resources = get_resources(config or {})
+        p_retriever = resources["retriever"]
         try:
-            all_chunks = retriever.scroll_all(filters=filters or {}, limit=1000)
+            all_chunks = p_retriever.scroll_all(filters=filters or {}, limit=1000)
             unread = [c for c in all_chunks if c.get("chunk_id") not in already_read_ids]
             keywords = ["STC", "NRC", "IIC", "NC", "SABINE", "SOUND", "ACOUSTIC", "NC-", "RT60"]
             anomalies = []
@@ -1089,7 +1138,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         cross_scope_sweep
     ]
 
-    return direct_tools, assembly_ledger, retriever
+    return direct_tools, assembly_ledger, get_resources
 
 
 # ============================================================================
@@ -1161,7 +1210,7 @@ def build_pro_agent(
 
     # ── Build shared components ONCE ──
     print("\n=== [PRO MODE] Initializing shared components... ===")
-    shared_tools, assembly_ledger, retriever = _build_shared_components(cfg)
+    shared_tools, assembly_ledger, get_resources_fn = _build_shared_components(cfg)
     print("=== [PRO MODE] Shared components ready. ===\n")
 
     # ── Sub-Agent Tool Factory ──

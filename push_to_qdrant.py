@@ -23,7 +23,7 @@ load_dotenv(override=True)
 # ──────────────────────────────────────────────────────────────────────
 NUM_WORKERS = 15
 DENSE_BATCH_SIZE = 50          # texts per worker per job
-SPARSE_BATCH_SIZE = 256        # fastembed is local, can go bigger
+SPARSE_BATCH_SIZE = 1024       # fastembed is local, can go bigger
 MAX_RETRIES = 5
 RETRY_WAIT_SECS = 30
 
@@ -154,15 +154,13 @@ total = len(chunks)
 print(f"   → {total:,} chunks loaded.")
 
 # ── Generate filter registry ─────────────────────────────────────────
-chunks_dir = Path(args.chunks).resolve().parent
-registry_path = str(chunks_dir / "filter_registry.json")
-build_filter_registry(chunks, registry_path)
+registry_dir = Path(__file__).resolve().parent / "filter_registries" / collection_name
+registry_dir.mkdir(parents=True, exist_ok=True)
+registry_path = registry_dir / f"{collection_name}_registry.json"
 
-# Also copy to project root for MCP server to find easily
-root_registry = Path(__file__).resolve().parent / "filter_registry.json"
-import shutil
-shutil.copy2(registry_path, str(root_registry))
-print(f"   → Also copied to {root_registry}")
+print(f"📊 Generating filter registry for '{collection_name}'...")
+build_filter_registry(chunks, str(registry_path))
+print(f"   → Registry saved to {registry_path}")
 
 # ──────────────────────────────────────────────────────────────────────
 # 2. Prepare texts / payloads / IDs upfront

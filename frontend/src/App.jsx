@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, Cpu, Search, Activity, Database, Clock, ChevronRight, X, Info, AlertTriangle } from 'lucide-react';
+import { Send, Bot, User, Cpu, Search, Activity, Database, Clock, ChevronRight, X, Info, AlertTriangle, FolderOpen } from 'lucide-react';
 import './App.css';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'https://potbelly-cuplike-mariam.ngrok-free.dev';
 
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false }; }
@@ -29,6 +29,8 @@ function App() {
   const [mode, setMode] = useState('fast'); // 'fast' or 'pro'
   const [stats, setStats] = useState({ chunks: 113798, latency: "0.43s", status: "Ready", index_date: "2026-05-09" });
   const [threadId] = useState(() => Math.random().toString(36).substring(7));
+  const [projects, setProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState('');
   
   const [currentAssistantMessage, setCurrentAssistantMessage] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -40,7 +42,14 @@ function App() {
   const scrollRef = useRef(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/stats`).then(r => r.json()).then(d => setStats(s => ({...s, ...d}))).catch(() => {});
+    const headers = { "ngrok-skip-browser-warning": "true" };
+    fetch(`${API_BASE}/stats`, { headers }).then(r => r.json()).then(d => setStats(s => ({...s, ...d}))).catch(() => {});
+    fetch(`${API_BASE}/projects`, { headers }).then(r => r.json()).then(d => {
+      if (d.projects && d.projects.length > 0) {
+        setProjects(d.projects);
+        setSelectedProject(d.projects[0].project_id);
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -64,11 +73,15 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
+        },
         body: JSON.stringify({ 
           message: userMessage, 
           thread_id: threadId,
-          mode: mode 
+          mode: mode,
+          project_id: selectedProject 
         }),
       });
 
@@ -256,19 +269,36 @@ function App() {
               <div className="logo-text">AcoustiQ <span style={{opacity: 0.4, fontWeight: 400}}>PRO</span></div>
             </div>
 
-            <div className="mode-toggle">
-              <button 
-                className={`mode-btn ${mode === 'fast' ? 'active' : ''}`}
-                onClick={() => setMode('fast')}
-              >
-                <Activity size={14} /> Fast
-              </button>
-              <button 
-                className={`mode-btn ${mode === 'pro' ? 'active' : ''}`}
-                onClick={() => setMode('pro')}
-              >
-                <Bot size={14} /> Pro
-              </button>
+            <div className="header-controls">
+              {projects.length > 0 && (
+                <div className="project-selector">
+                  <FolderOpen size={14} className="project-icon" />
+                  <select
+                    value={selectedProject}
+                    onChange={(e) => setSelectedProject(e.target.value)}
+                    className="project-dropdown"
+                  >
+                    {projects.map(p => (
+                      <option key={p.project_id} value={p.project_id}>{p.display_name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="mode-toggle">
+                <button 
+                  className={`mode-btn ${mode === 'fast' ? 'active' : ''}`}
+                  onClick={() => setMode('fast')}
+                >
+                  <Activity size={14} /> Fast
+                </button>
+                <button 
+                  className={`mode-btn ${mode === 'pro' ? 'active' : ''}`}
+                  onClick={() => setMode('pro')}
+                >
+                  <Bot size={14} /> Pro
+                </button>
+              </div>
             </div>
           </header>
 

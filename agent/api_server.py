@@ -67,6 +67,21 @@ async def stats():
         "index_date": "2026-05-09"
     }
 
+@app.get("/projects")
+async def list_projects():
+    """Auto-discover available projects by scanning the filter_registries directory."""
+    from pathlib import Path
+    registries_dir = Path(__file__).resolve().parent.parent / "filter_registries"
+    projects = []
+    if registries_dir.exists():
+        for folder in sorted(registries_dir.iterdir()):
+            if folder.is_dir():
+                project_id = folder.name
+                # Convert folder name to display name: project_dayton_hotel -> Dayton Hotel
+                display_name = project_id.replace("project_", "").replace("_", " ").title()
+                projects.append({"project_id": project_id, "display_name": display_name})
+    return {"projects": projects}
+
 @app.post("/chat")
 async def chat(request: Request):
     """
@@ -78,8 +93,8 @@ async def chat(request: Request):
     prompt = body.get("message", "")
     mode = body.get("mode", "fast")
     thread_id = body.get("thread_id", "default-web-user")
-    
-    config = {"configurable": {"thread_id": thread_id}}
+    project_id = body.get("project_id", cfg.collection)
+    config = {"configurable": {"thread_id": thread_id, "project_id": project_id}}
     
     # Choose which graph to run
     active_graph = pro_graph if mode == "pro" else fast_graph

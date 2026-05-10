@@ -5893,13 +5893,13 @@ def main():
     parser.add_argument(
         "--render-max-workers",
         type=int,
-        default=2,
+        default=5,
         help="Max workers for the page-render cache stage in parallel mode",
     )
     parser.add_argument(
         "--llm-max-workers",
         type=int,
-        default=12,
+        default=30,
         help="Max workers for cached-image LLM extraction in parallel mode",
     )
     parser.add_argument(

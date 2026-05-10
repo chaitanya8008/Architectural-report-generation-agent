@@ -13,4 +13,7 @@ langgraph-checkpoint-postgres
 psycopg[binary,pool]
 qdrant-client
 fastembed
-streamlit
+streamlit
+fastapi
+uvicorn
+python-multipart
