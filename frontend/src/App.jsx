@@ -52,8 +52,19 @@ function App() {
     }).catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const forceScrollToBottom = () => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  };
+
+  // Smart auto-scroll: only scroll down if the user is already near the bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+      if (isNearBottom) {
+        scrollRef.current.scrollTop = scrollHeight;
+      }
+    }
   }, [messages, currentAssistantMessage, lastThought, toolSteps]);
 
   const handleSubmit = async (e, customPrompt) => {
@@ -63,6 +74,7 @@ function App() {
 
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setTimeout(forceScrollToBottom, 50);
     setIsLoading(true);
     setIsThinking(true);
     setToolSteps([]);

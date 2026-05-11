@@ -1,11 +1,7 @@
 """
-Core types, configuration, schemas, and utilities for the acoustic consulting agent.
+Core types, configuration, and utilities for the AcoustiQ agent.
 
-This module consolidates:
-- agent/config.py
-- agent/schemas.py
-- agent/retrieval/utils.py
-- agent/retrieval/response_parser.py
+Provides AgentConfig, environment loading, and Gemini response parsing helpers.
 """
 
 from __future__ import annotations

@@ -1,14 +1,18 @@
 """
 AcoustiQ agent package.
 
-This package provides a retrieval-augmented generation (RAG) agent for
-acoustic consulting queries. It uses hybrid search (dense + sparse + RRF)
-with Cohere cross-encoder reranking over a Qdrant vector store.
+Provides two ReAct agent modes for acoustic consulting:
+  - Fast Mode (build_agent): Single agent for Q&A
+  - Pro Mode (build_pro_agent): Boss agent dispatching 8 specialist sub-agents
+
+Both use hybrid search (dense + sparse + RRF) with Cohere cross-encoder
+reranking over Qdrant, via the shared HybridRetriever in mcp_server/retrieval.py.
 
 Structure:
-- core.py: Configuration and utilities
-- agent.py: ReAct agent with MCP retrieval tools
-- ../mcp_server/: Standalone MCP retrieval server (tools + retrieval logic)
+- core.py: Configuration and response parsing utilities
+- agent.py: Fast Mode agent, Pro Mode boss + sub-agent builder
+- ../report_gen/personas.py: Sub-agent persona prompts
+- ../mcp_server/retrieval.py: HybridRetriever (shared retrieval engine)
 """
 
 from __future__ import annotations
