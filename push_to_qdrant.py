@@ -23,7 +23,7 @@ load_dotenv(override=True)
 # ──────────────────────────────────────────────────────────────────────
 NUM_WORKERS = 15
 DENSE_BATCH_SIZE = 50          # texts per worker per job
-SPARSE_BATCH_SIZE = 1024       # fastembed is local, can go bigger
+SPARSE_BATCH_SIZE = 256       # fastembed is local, can go bigger
 MAX_RETRIES = 5
 RETRY_WAIT_SECS = 30
 
@@ -117,6 +117,8 @@ parser.add_argument("--chunks", type=str, default=DEFAULT_CHUNKS_PATH, help="Pat
 parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Number of parallel embedding workers")
 parser.add_argument("--batch-size", type=int, default=DENSE_BATCH_SIZE, help="Texts per dense-embedding batch")
 parser.add_argument("--collection", type=str, default="VAVA", help="Qdrant collection name")
+parser.add_argument("--project-id", type=str, required=True, help="Project ID to store in chunk payloads")
+parser.add_argument("--replace-project", action="store_true", help="Delete existing points for this project_id before upsert")
 parser.add_argument(
     "--repair-indexes", action="store_true",
     help="Add payload indexes to existing collection without re-ingesting."
@@ -143,6 +145,7 @@ if args.repair_indexes:
 NUM_WORKERS = args.workers
 DENSE_BATCH_SIZE = args.batch_size
 collection_name = args.collection
+project_id = args.project_id
 
 # ──────────────────────────────────────────────────────────────────────
 # 1. Load chunks
@@ -151,15 +154,19 @@ print(f"📂 Loading chunks from: {args.chunks} ...")
 with open(args.chunks, "r", encoding="utf-8") as f:
     chunks = json.load(f)
 total = len(chunks)
+for chunk in chunks:
+    chunk["project_id"] = project_id
 print(f"   → {total:,} chunks loaded.")
 
 # ── Generate filter registry ─────────────────────────────────────────
-registry_dir = Path(__file__).resolve().parent / "filter_registries" / collection_name
+registry_dir = Path(__file__).resolve().parent / "filter_registries" / project_id
 registry_dir.mkdir(parents=True, exist_ok=True)
-registry_path = registry_dir / f"{collection_name}_registry.json"
+registry_path = registry_dir / f"{project_id}_registry.json"
+legacy_registry_path = registry_dir / f"{project_id}.json"
 
-print(f"📊 Generating filter registry for '{collection_name}'...")
+print(f"📊 Generating filter registry for project '{project_id}'...")
 build_filter_registry(chunks, str(registry_path))
+build_filter_registry(chunks, str(legacy_registry_path))
 print(f"   → Registry saved to {registry_path}")
 
 # ──────────────────────────────────────────────────────────────────────
@@ -183,7 +190,7 @@ for i, chunk in enumerate(chunks):
     payloads.append(payload)
 
     chunk_id = chunk.get("chunk_id", f"fallback_id_{i}")
-    point_ids.append(str(uuid_lib.uuid5(uuid_lib.NAMESPACE_URL, chunk_id + str(i))))
+    point_ids.append(str(uuid_lib.uuid5(uuid_lib.NAMESPACE_URL, project_id + chunk_id + str(i))))
 
 # Free the raw chunks list — we have what we need
 del chunks
@@ -285,21 +292,38 @@ else:
     qdrant = QdrantClient(path=qdrant_path)
 
 existing = [c.name for c in qdrant.get_collections().collections]
-if collection_name in existing:
-    qdrant.delete_collection(collection_name)
-
-qdrant.create_collection(
-    collection_name=collection_name,
-    vectors_config={
-        "dense": qmodels.VectorParams(size=768, distance=qmodels.Distance.COSINE)
-    },
-    sparse_vectors_config={
-        "sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
-    },
-)
+if collection_name not in existing:
+    qdrant.create_collection(
+        collection_name=collection_name,
+        vectors_config={
+            "dense": qmodels.VectorParams(size=768, distance=qmodels.Distance.COSINE)
+        },
+        sparse_vectors_config={
+            "sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
+        },
+    )
+else:
+    print(f"📦 Appending to existing collection '{collection_name}'")
 
 # ── Create payload indexes for fast filtered search ──────────────────
 create_payload_indexes(qdrant, collection_name)
+
+if args.replace_project:
+    print(f"🧹 Deleting existing points for project_id='{project_id}'...")
+    qdrant.delete(
+        collection_name=collection_name,
+        points_selector=qmodels.FilterSelector(
+            filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="project_id",
+                        match=qmodels.MatchValue(value=project_id),
+                    )
+                ]
+            )
+        ),
+        wait=True,
+    )
 
 # ──────────────────────────────────────────────────────────────────────
 # 6. Upsert to Qdrant in batches
@@ -340,6 +364,7 @@ for start in tqdm(range(0, total, UPSERT_BATCH), desc="Upsert", unit="batch"):
 count = qdrant.get_collection(collection_name).points_count
 print("\n" + "=" * 50)
 print(f"🎉 DONE!  Qdrant points: {count:,}")
+print(f"   Project ID          : {project_id}")
 print(f"   Pushed successfully : {pushed:,} / {total:,}")
 if skipped:
     print(f"   ⚠️  Skipped (no dense vec): {skipped:,}")

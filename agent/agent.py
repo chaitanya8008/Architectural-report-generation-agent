@@ -177,6 +177,28 @@ def build_agent(
     from langchain_core.tools import tool
     from langgraph.prebuilt import create_react_agent
 
+    llm = ChatGoogleGenerativeAI(
+        model=cfg.chat_model,
+        location=os.environ.get("VERTEX_LOCATION", "us-central1"),
+        project=os.environ.get("GCP_PROJECT_ID"),
+        vertexai=True,
+        temperature=0,
+        timeout=180,
+        max_retries=2,
+        streaming=True,
+        include_thoughts=True,
+    )
+
+    tools, _, _ = _build_shared_components(cfg)
+    base_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+    full_prompt = base_prompt + _load_filter_reference()
+    return create_react_agent(
+        model=llm,
+        tools=tools,
+        prompt=full_prompt,
+        checkpointer=checkpointer,
+    )
+
     # Add mcp_server to path so we can import retrieval
     mcp_server_dir = str(_PROJECT_ROOT / "mcp_server")
     if mcp_server_dir not in sys.path:
@@ -680,7 +702,7 @@ def _build_shared_components(cfg: "AgentConfig"):
 
     def get_resources(config: RunnableConfig):
         """Helper to load/get project-specific retriever and registry."""
-        project_id = config.get("configurable", {}).get("project_id", cfg.collection)
+        project_id = config.get("configurable", {}).get("project_id", cfg.project_id)
         
         if project_id in resource_cache:
             return resource_cache[project_id]
@@ -689,7 +711,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         p_retriever = HybridRetriever(
             qdrant_url=os.environ.get("QDRANT_URL"),
             qdrant_path=str(_PROJECT_ROOT / "qdrant_data"),
-            collection_name=project_id,
+            collection_name=cfg.collection,
             embedding_model=cfg.embedding_model,
             vertex_location=os.environ.get("VERTEX_LOCATION", "asia-south1"),
             gcp_project_id=os.environ.get("GCP_PROJECT_ID"),
@@ -697,11 +719,12 @@ def _build_shared_components(cfg: "AgentConfig"):
 
         # ── Load project-specific filter registry ──
         reg_dir = _PROJECT_ROOT / "filter_registries" / project_id
-        registry_path = reg_dir / f"{project_id}_registry.json"
-        
-        # Fallback to root filter_registry.json for legacy support
-        if not registry_path.exists():
-            registry_path = _PROJECT_ROOT / "filter_registry.json"
+        registry_candidates = [
+            reg_dir / f"{project_id}_registry.json",
+            reg_dir / f"{project_id}.json",
+            _PROJECT_ROOT / "filter_registry.json",
+        ]
+        registry_path = next((path for path in registry_candidates if path.exists()), registry_candidates[-1])
 
         p_filter_registry = {}
         if registry_path.exists():
@@ -725,12 +748,26 @@ def _build_shared_components(cfg: "AgentConfig"):
             except Exception as e:
                 print(f"WARNING: could not load descriptions at {desc_path}: {e}")
 
+        project_filter_id = project_id
+        available_project_ids = p_filter_registry.get("available_filters", {}).get("project_id", [])
+        if p_filter_registry.get("project_id"):
+            project_filter_id = str(p_filter_registry["project_id"])
+        elif isinstance(available_project_ids, list) and len(available_project_ids) == 1:
+            project_filter_id = str(available_project_ids[0])
+
         resource_cache[project_id] = {
             "retriever": p_retriever,
             "filter_registry": p_filter_registry,
-            "filter_descriptions": p_filter_descriptions
+            "filter_descriptions": p_filter_descriptions,
+            "project_id": project_filter_id,
+            "base_filters": {"project_id": project_filter_id},
         }
         return resource_cache[project_id]
+
+    def _scope_filters(resources: dict[str, Any], filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        scoped = dict(resources.get("base_filters", {}))
+        scoped.update(filters or {})
+        return scoped
 
     # ── Shared assembly ledger ──
     assembly_ledger: dict[str, dict] = {}
@@ -869,6 +906,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         aid = _parse_list(assembly_id)
         if aid: filters["assembly_id"] = aid
         if source_file_name and source_file_name.strip(): filters["source_file_name"] = source_file_name.strip()
+        filters = _scope_filters(resources, filters)
         try:
             if filters and filters.get("exhaustive"):
                 clean_filters = {k: v for k, v in filters.items() if k != "exhaustive"}
@@ -920,6 +958,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         filters = {"sheet_number": sheet_number.strip()}
         if revision_label and revision_label.strip():
             filters["revision_label"] = revision_label.strip()
+        filters = _scope_filters(resources, filters)
         try:
             chunks = p_retriever.scroll_all(filters=filters, limit=500)
         except Exception as e:
@@ -977,7 +1016,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         resources = get_resources(config or {})
         p_retriever = resources["retriever"]
         try:
-            res = p_retriever.get_document_map(filters=filters)
+            res = p_retriever.get_document_map(filters=_scope_filters(resources, filters or {}))
             output = [
                 f"## Project Document Map",
                 f"Total Sheets: {res['total_sheets']}",
@@ -1079,7 +1118,8 @@ def _build_shared_components(cfg: "AgentConfig"):
         resources = get_resources(config or {})
         p_retriever = resources["retriever"]
         try:
-            all_chunks = p_retriever.scroll_all(filters=filters or {}, limit=1000)
+            scoped_filters = _scope_filters(resources, filters or {})
+            all_chunks = p_retriever.scroll_all(filters=scoped_filters, limit=1000)
             unread = [c for c in all_chunks if c.get("chunk_id") not in already_read_ids]
             keywords = ["STC", "NRC", "IIC", "NC", "SABINE", "SOUND", "ACOUSTIC", "NC-", "RT60"]
             anomalies = []

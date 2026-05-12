@@ -118,6 +118,16 @@ PROJECT_CONTEXTS = {
     ),
 }
 
+
+def slugify_project_name(value: str, prefix: str = "project") -> str:
+    """Create a stable project id from a project folder/display name."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
+    if not slug:
+        slug = "untitled"
+    if prefix and not slug.startswith(f"{prefix}_"):
+        slug = f"{prefix}_{slug}"
+    return slug
+
 SUPPORTED_PAGE_CLASSES = {
     "drawing",
     "mixed",
@@ -5781,10 +5791,14 @@ def summarize_ingestion_quality(page_records: List[dict], chunks: List[dict]) ->
 def main():
     parser = argparse.ArgumentParser(description="Production drawing-package PDF ingestor")
     parser.add_argument("--root", required=True, help="Root directory containing PDF drawing packages")
-    parser.add_argument("--project-id", required=True, help="Project identifier")
+    parser.add_argument("--project-id", default="", help="Project identifier. Defaults to a slug from --root.")
     parser.add_argument("--project-name", default="", help="Project name")
     parser.add_argument("--project-number", default="", help="Project number")
-    parser.add_argument("--output", default="ingestion-output", help="Output directory")
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Output directory. Defaults to tmp_runs/<project_id>.",
+    )
     parser.add_argument("--collection", default="VAVA", help="Qdrant collection name")
     parser.add_argument("--dpi", type=int, default=300, help="DPI for page rendering")
     parser.add_argument("--db-url", default=os.getenv("DATABASE_URL", ""), help="PostgreSQL connection string")
@@ -5927,7 +5941,12 @@ def main():
     vision_model_pool = parse_parallel_model_pool(args.vision_model_pool, fallback_model=args.llm_model)
 
     root_path = Path(args.root)
-    output_path = Path(args.output)
+    if not args.project_id:
+        args.project_id = slugify_project_name(root_path.name)
+    if not args.project_name:
+        args.project_name = root_path.name
+
+    output_path = Path(args.output) if args.output else Path("tmp_runs") / args.project_id
     output_path.mkdir(parents=True, exist_ok=True)
     page_image_cache_root = (
         Path(args.page_image_cache_dir)
