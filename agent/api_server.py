@@ -93,7 +93,7 @@ async def chat(request: Request):
     prompt = body.get("message", "")
     mode = body.get("mode", "fast")
     thread_id = body.get("thread_id", "default-web-user")
-    project_id = body.get("project_id", cfg.collection)
+    project_id = body.get("project_id", cfg.project_id)
     config = {"configurable": {"thread_id": thread_id, "project_id": project_id}}
     
     # Choose which graph to run

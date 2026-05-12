@@ -1223,12 +1223,18 @@ def build_pro_agent(
         """Create a tool that runs a specialist sub-agent."""
         from langchain_core.tools import StructuredTool
 
-        def _run_subagent(task: str) -> str:
+        def _run_subagent(task: str, config: RunnableConfig) -> str:
             print(f"\n--- [SUB-AGENT: {name}] Starting...")
             print(f"    Task: {task[:120]}...")
             try:
+                worker_config = {
+                    "configurable": dict((config or {}).get("configurable", {}))
+                }
                 worker = _build_worker_agent(cfg, persona_prompt, shared_tools)
-                result = worker.invoke({"messages": [HumanMessage(content=task)]})
+                result = worker.invoke(
+                    {"messages": [HumanMessage(content=task)]},
+                    config=worker_config,
+                )
                 findings = _extract_clean_text(result)
                 print(f"[DONE] [SUB-AGENT: {name}] Complete. ({len(findings)} chars)")
                 return findings
