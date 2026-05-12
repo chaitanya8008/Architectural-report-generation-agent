@@ -1,4 +1,5 @@
 import json
+import pickle
 import time
 import os
 import sys
@@ -192,100 +193,117 @@ for i, chunk in enumerate(chunks):
     chunk_id = chunk.get("chunk_id", f"fallback_id_{i}")
     point_ids.append(str(uuid_lib.uuid5(uuid_lib.NAMESPACE_URL, project_id + chunk_id + str(i))))
 
-# Free the raw chunks list — we have what we need
-del chunks
-
 # ──────────────────────────────────────────────────────────────────────
-# 3. Dense embeddings FIRST (parallel – Google API, the bottleneck)
+# 3. Dense embeddings (API-based – multi-threaded)
 # ──────────────────────────────────────────────────────────────────────
-print(f"\n🚀 Generating dense vectors with {NUM_WORKERS} workers, batch_size={DENSE_BATCH_SIZE} ...")
+cache_dir = Path("tmp_cache")
+cache_dir.mkdir(exist_ok=True)
+cache_file = cache_dir / f"embeddings_{project_id}.pkl"
 
-all_dense = [None] * total  # pre-allocate slots
-dense_lock = Lock()
+all_dense = [None] * total
+all_sparse = []
 
-def embed_dense_batch(batch_idx: int, start: int, end: int):
-    """Call Google embedding API for a slice of texts."""
-    b_texts = texts_to_embed[start:end]
+if cache_file.exists():
+    print(f"📦 Found cached embeddings at {cache_file}. Loading...")
+    with open(cache_file, "rb") as f:
+        cache_data = pickle.load(f)
+        if len(cache_data.get("all_dense", [])) == total:
+            all_dense = cache_data["all_dense"]
+            all_sparse = cache_data["all_sparse"]
+            print("   ✅ Loaded from cache.")
+        else:
+            print("   ⚠️  Cache size mismatch. Regenerating...")
+            cache_file.unlink()
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            embedder = GoogleGenerativeAIEmbeddings(
-                model="models/text-embedding-004",
-                location="us-central1",
-                project=os.getenv("GCP_PROJECT_ID"),
-                vertexai=True,
-            )
-            b_dense = embedder.embed_documents(b_texts)
-            if len(b_dense) != len(b_texts):
-                raise ValueError(
-                    f"Truncated! Expected {len(b_texts)} vectors, got {len(b_dense)}"
-                )
-            # Write results into the pre-allocated list (no lock needed for non-overlapping slices)
-            for j, vec in enumerate(b_dense):
-                all_dense[start + j] = vec
-            return len(b_dense)
-        except Exception as e:
-            if attempt < MAX_RETRIES:
-                wait = RETRY_WAIT_SECS * attempt
-                print(
-                    f"\n  ⏳ Batch {batch_idx}: API error (attempt {attempt}/{MAX_RETRIES}). "
-                    f"Waiting {wait}s ... Error: {e}"
-                )
-                time.sleep(wait)
-            else:
-                print(f"\n  ❌ Batch {batch_idx}: FAILED after {MAX_RETRIES} attempts. Error: {e}")
-                raise
+if not all_sparse:
+    print(f"\n🚀 Generating dense vectors with {NUM_WORKERS} workers, batch_size={DENSE_BATCH_SIZE} ...")
 
-batch_ranges = []
-for i, start in enumerate(range(0, total, DENSE_BATCH_SIZE)):
-    end = min(start + DENSE_BATCH_SIZE, total)
-    batch_ranges.append((i, start, end))
+    def embed_dense_batch(batch_idx: int, start: int, end: int):
+        """Call Google embedding API for a slice of texts."""
+        b_texts = texts_to_embed[start:end]
 
-num_batches = len(batch_ranges)
-dense_failed = []
-
-with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-    futures = {
-        executor.submit(embed_dense_batch, idx, s, e): idx
-        for idx, s, e in batch_ranges
-    }
-    with tqdm(total=total, desc="Dense Embed", unit="chunks") as pbar:
-        for future in as_completed(futures):
-            batch_idx = futures[future]
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
-                count = future.result()
-                pbar.update(count)
-            except Exception:
-                dense_failed.append(batch_idx)
-                _, s, e = batch_ranges[batch_idx]
-                pbar.update(e - s)
-                pbar.set_postfix(failed=len(dense_failed))
+                embedder = GoogleGenerativeAIEmbeddings(
+                    model="models/text-embedding-004",
+                    location="us-central1",
+                    project=os.getenv("GCP_PROJECT_ID"),
+                    vertexai=True,
+                )
+                b_dense = embedder.embed_documents(b_texts)
+                if len(b_dense) != len(b_texts):
+                    raise ValueError(
+                        f"Truncated! Expected {len(b_texts)} vectors, got {len(b_dense)}"
+                    )
+                # Write results into the pre-allocated list (no lock needed for non-overlapping slices)
+                for j, vec in enumerate(b_dense):
+                    all_dense[start + j] = vec
+                return len(b_dense)
+            except Exception as e:
+                if attempt < MAX_RETRIES:
+                    wait = RETRY_WAIT_SECS * attempt
+                    print(
+                        f"\n  ⏳ Batch {batch_idx}: API error (attempt {attempt}/{MAX_RETRIES}). "
+                        f"Waiting {wait}s ... Error: {e}"
+                    )
+                    time.sleep(wait)
+                else:
+                    print(f"\n  ❌ Batch {batch_idx}: FAILED after {MAX_RETRIES} attempts. Error: {e}")
+                    raise
 
-if dense_failed:
-    print(f"\n⚠️  {len(dense_failed)} dense batches failed — those chunks will be skipped during upsert.")
-print("   ✅ Dense vectors done.\n")
+    batch_ranges = []
+    for i, start in enumerate(range(0, total, DENSE_BATCH_SIZE)):
+        end = min(start + DENSE_BATCH_SIZE, total)
+        batch_ranges.append((i, start, end))
 
-# ──────────────────────────────────────────────────────────────────────
-# 4. Sparse embeddings (local model – fast, no API limits)
-# ──────────────────────────────────────────────────────────────────────
-print(f"⚡ Generating sparse vectors for {total:,} chunks (batch_size={SPARSE_BATCH_SIZE}) ...")
-sparse_model = SparseTextEmbedding(model_name="Qdrant/bm42-all-minilm-l6-v2-attentions")
-all_sparse = list(
-    tqdm(
-        sparse_model.embed(texts_to_embed, batch_size=SPARSE_BATCH_SIZE),
-        total=total,
-        desc="Sparse Embed",
+    dense_failed = []
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+        futures = {
+            executor.submit(embed_dense_batch, idx, s, e): idx
+            for idx, s, e in batch_ranges
+        }
+        with tqdm(total=total, desc="Dense Embed", unit="chunks") as pbar:
+            for future in as_completed(futures):
+                batch_idx = futures[future]
+                try:
+                    count = future.result()
+                    pbar.update(count)
+                except Exception:
+                    dense_failed.append(batch_idx)
+                    _, s, e = batch_ranges[batch_idx]
+                    pbar.update(e - s)
+                    pbar.set_postfix(failed=len(dense_failed))
+
+    if dense_failed:
+        print(f"\n⚠️  {len(dense_failed)} dense batches failed — those chunks will be skipped during upsert.")
+    print("   ✅ Dense vectors done.\n")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # 4. Sparse embeddings (local model – fast, no API limits)
+    # ──────────────────────────────────────────────────────────────────────
+    print(f"⚡ Generating sparse vectors for {total:,} chunks (batch_size={SPARSE_BATCH_SIZE}) ...")
+    sparse_model = SparseTextEmbedding(model_name="Qdrant/bm42-all-minilm-l6-v2-attentions")
+    all_sparse = list(
+        tqdm(
+            sparse_model.embed(texts_to_embed, batch_size=SPARSE_BATCH_SIZE),
+            total=total,
+            desc="Sparse Embed",
+        )
     )
-)
-print("   ✅ Sparse vectors done.\n")
+    print("   ✅ Sparse vectors done.\n")
+    
+    # Save to cache
+    print(f"💾 Saving embeddings to {cache_file} for safety...")
+    with open(cache_file, "wb") as f:
+        pickle.dump({"all_dense": all_dense, "all_sparse": all_sparse}, f)
 
 # ──────────────────────────────────────────────────────────────────────
 # 5. Qdrant setup – clean slate
 # ──────────────────────────────────────────────────────────────────────
 qdrant_url = os.getenv("QDRANT_URL")
 if qdrant_url:
-    print(f"📡 Connecting to Qdrant at {qdrant_url}...")
-    qdrant = QdrantClient(url=qdrant_url)
+    print(f"📡 Connecting to Qdrant at {qdrant_url} (timeout=600s)...")
+    qdrant = QdrantClient(url=qdrant_url, timeout=600)
 else:
     qdrant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_data")
     print(f"📂 Using local Qdrant at {qdrant_path}...")
@@ -328,8 +346,8 @@ if args.replace_project:
 # ──────────────────────────────────────────────────────────────────────
 # 6. Upsert to Qdrant in batches
 # ──────────────────────────────────────────────────────────────────────
-UPSERT_BATCH = 200  # bigger batches for local upsert, it's fast
-print(f"📤 Upserting to Qdrant in batches of {UPSERT_BATCH} ...")
+UPSERT_BATCH = 100  # Smaller batches for stability
+print(f"📤 Upserting to Qdrant in batches of {UPSERT_BATCH} with 0.1s throttle...")
 
 pushed = 0
 skipped = 0
@@ -351,12 +369,22 @@ for start in tqdm(range(0, total, UPSERT_BATCH), desc="Upsert", unit="batch"):
                         values=all_sparse[j].values.tolist(),
                     ),
                 },
-                payload=payloads[j],
+                payload=chunks[j],
             )
         )
+    
     if points:
-        qdrant.upsert(collection_name=collection_name, points=points)
-        pushed += len(points)
+        for attempt in range(3):
+            try:
+                qdrant.upsert(collection_name=collection_name, points=points)
+                pushed += len(points)
+                break
+            except Exception as e:
+                if attempt == 2: raise
+                print(f"\n⚠️ Upsert batch failed, retrying in 5s... {e}")
+                time.sleep(5)
+    
+    time.sleep(0.1) # Throttle to allow Qdrant indexing to breathe
 
 # ──────────────────────────────────────────────────────────────────────
 # 7. Summary
@@ -368,6 +396,4 @@ print(f"   Project ID          : {project_id}")
 print(f"   Pushed successfully : {pushed:,} / {total:,}")
 if skipped:
     print(f"   ⚠️  Skipped (no dense vec): {skipped:,}")
-if dense_failed:
-    print(f"   ⚠️  Failed dense batches  : {len(dense_failed)}")
 print("=" * 50)

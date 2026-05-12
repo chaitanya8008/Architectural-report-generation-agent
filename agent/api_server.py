@@ -55,7 +55,7 @@ fast_graph = build_agent(cfg, checkpointer=checkpointer)
 
 # PRO MODE: Boss ReAct Agent with Sub-Agent Tools
 # Shared retriever is initialized ONCE here — no per-request rebuilds
-pro_graph = build_report_graph(cfg, checkpointer=checkpointer)
+pro_graph, pro_todo_ledger = build_report_graph(cfg, checkpointer=checkpointer)
 
 @app.get("/stats")
 async def stats():
@@ -93,7 +93,9 @@ async def chat(request: Request):
     prompt = body.get("message", "")
     mode = body.get("mode", "fast")
     thread_id = body.get("thread_id", "default-web-user")
-    project_id = body.get("project_id", cfg.project_id)
+    # Ensure project_id is never an empty string
+    incoming_pid = body.get("project_id")
+    project_id = incoming_pid or cfg.project_id
     config = {"configurable": {"thread_id": thread_id, "project_id": project_id}}
     
     # Choose which graph to run
@@ -140,6 +142,11 @@ async def chat(request: Request):
                 
                 from langchain_core.messages import ToolMessage
                 if isinstance(msg, ToolMessage):
+                    if msg.name == "update_todo":
+                        boss_todos = {k: v for k, v in pro_todo_ledger.items() if v.get("agent") == "boss"}
+                        yield {"event": "todo", "data": json.dumps(boss_todos)}
+                        continue
+                        
                     import re
                     content_str = msg.content
                     if "**[1]**" in content_str:

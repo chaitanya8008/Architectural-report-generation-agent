@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, Cpu, Search, Activity, Database, Clock, ChevronRight, X, Info, AlertTriangle, FolderOpen } from 'lucide-react';
+import { Send, Bot, User, Cpu, Search, Activity, Database, Clock, ChevronRight, X, Info, AlertTriangle, FolderOpen, ListTodo } from 'lucide-react';
 import './App.css';
 
 const API_BASE = 'https://potbelly-cuplike-mariam.ngrok-free.dev';
@@ -38,6 +38,7 @@ function App() {
   const [toolSteps, setToolSteps] = useState([]);
   const [sources, setSources] = useState([]);
   const [activeSource, setActiveSource] = useState(null);
+  const [todoItems, setTodoItems] = useState([]);
   
   const scrollRef = useRef(null);
 
@@ -81,6 +82,13 @@ function App() {
     setSources([]);
     setLastThought('');
     setCurrentAssistantMessage('');
+    setTodoItems([]);
+
+    // Ensure we have a project ID selected
+    let projectIdToUse = selectedProject;
+    if (!projectIdToUse && projects.length > 0) {
+      projectIdToUse = projects[0].project_id;
+    }
 
     try {
       const response = await fetch(`${API_BASE}/chat`, {
@@ -93,7 +101,7 @@ function App() {
           message: userMessage, 
           thread_id: threadId,
           mode: mode,
-          project_id: selectedProject 
+          project_id: projectIdToUse 
         }),
       });
 
@@ -153,12 +161,21 @@ function App() {
               tempSources.push(src);
               setSources([...tempSources]);
             } catch (err) {}
+          } else if (eventType === 'todo') {
+            try {
+              const todoData = JSON.parse(data);
+              const items = Object.entries(todoData)
+                .map(([id, item]) => ({ id, ...item }))
+                .sort((a, b) => parseInt(a.id.slice(1)) - parseInt(b.id.slice(1)));
+              setTodoItems(items);
+            } catch (err) {}
           } else if (eventType === 'done') {
             setMessages(prev => [...prev, { role: 'assistant', content: assistantText, sources: [...tempSources] }]);
             setCurrentAssistantMessage('');
             setIsThinking(false);
             setLastThought('');
             setToolSteps([]);
+            setTodoItems([]);
           }
         }
       }
@@ -341,11 +358,31 @@ function App() {
                       <div className="message-row assistant">
                         <div className="avatar assistant"><Bot size={18} /></div>
                         <div className="message-content">
-                          {isThinking && (
+                          {isThinking && todoItems.length === 0 && (
                             <div className="process-indicator">
                               <div className="process-line"><div className="process-line-active"></div></div>
                               <div className="process-info"><span>Thinking</span>{toolSteps.length > 0 && <span className="tool-badge"><Search size={10} /> {toolSteps[toolSteps.length-1].name}</span>}</div>
                               {lastThought && <div className="thought-snippet">{lastThought}</div>}
+                            </div>
+                          )}
+                          {todoItems.length > 0 && (
+                            <div className="todo-panel">
+                              <div className="todo-header">
+                                <ListTodo size={14} /> Investigation Plan
+                              </div>
+                              {todoItems.map(item => (
+                                <div key={item.id} className={`todo-item ${item.status}`}>
+                                  <span className="todo-icon">
+                                    {item.status === 'done' ? '✅' : item.status === 'in_progress' ? '🔄' : '⬜'}
+                                  </span>
+                                  <div className="todo-content">
+                                    <div className="todo-text">{item.text}</div>
+                                    {item.notes?.length > 0 && (
+                                      <div className="todo-note">{item.notes[item.notes.length - 1]}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           )}
                           {currentAssistantMessage && renderContent(currentAssistantMessage)}

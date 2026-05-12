@@ -16,5 +16,5 @@ from agent.agent import build_pro_agent
 
 
 def build_report_graph(cfg: Any, checkpointer: Any = None):
-    """Build the Pro Mode agent — a Boss ReAct agent with sub-agent tools."""
+    """Build the Pro Mode agent and return (graph, todo_ledger)."""
     return build_pro_agent(cfg, checkpointer=checkpointer)

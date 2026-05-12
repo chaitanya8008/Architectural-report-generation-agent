@@ -27,10 +27,18 @@ import os
 import sys
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union, Annotated
 
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool, InjectedToolArg
+try:
+    from langchain_core.runnables import InjectedConfig
+except ImportError:
+    try:
+        from langchain_core.tools import InjectedConfig
+    except ImportError:
+        InjectedConfig = Any
 
 # ── Resolve paths ────────────────────────────────────────────────────────────
 
@@ -189,7 +197,7 @@ def build_agent(
         include_thoughts=True,
     )
 
-    tools, _, _ = _build_shared_components(cfg)
+    tools, _, _, _ = _build_shared_components(cfg)
     base_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     full_prompt = base_prompt + _load_filter_reference()
     return create_react_agent(
@@ -688,7 +696,6 @@ def _build_shared_components(cfg: "AgentConfig"):
     Initialize the heavy components ONCE: retriever, tools, ledger.
     Returns (tools_list, assembly_ledger, get_resources_fn) for reuse across all agents.
     """
-    from langchain_core.tools import tool
     import json
 
     mcp_server_dir = str(_PROJECT_ROOT / "mcp_server")
@@ -701,11 +708,13 @@ def _build_shared_components(cfg: "AgentConfig"):
     resource_cache: Dict[str, Any] = {}
 
     def get_resources(config: RunnableConfig):
-        """Helper to load/get project-specific retriever and registry."""
-        project_id = config.get("configurable", {}).get("project_id", cfg.project_id)
+        # Ensure project_id is never an empty string
+        project_id = config.get("configurable", {}).get("project_id") or cfg.project_id
         
         if project_id in resource_cache:
             return resource_cache[project_id]
+
+        print(f"   [RESOURCES] Loading project: {project_id}")
 
         # ── Initialize project-specific retriever ──
         p_retriever = HybridRetriever(
@@ -771,10 +780,14 @@ def _build_shared_components(cfg: "AgentConfig"):
 
     # ── Shared assembly ledger ──
     assembly_ledger: dict[str, dict] = {}
+    
+    # ── Shared TODO ledger (investigation planner) ──
+    todo_ledger: dict[str, dict] = {}
+    todo_counter = {"n": 0}
 
     # ── Define all tools (closures over shared retriever) ──
     @tool
-    def list_available_filters(config: RunnableConfig) -> str:
+    def list_available_filters(config: Annotated[RunnableConfig, InjectedConfig]) -> str:
         """Returns a compact summary of all filterable fields for the loaded project.
         Call this to discover what filters you can apply to search_documents.
         Fields with few values are listed in full. Fields with many values show a count and sample."""
@@ -848,7 +861,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         source_file_name: str = "",
         exhaustive: bool = False,
         limit: int = 60,
-        config: Optional[RunnableConfig] = None,
+        config: Annotated[RunnableConfig, InjectedConfig] = None,
     ) -> str:
         """Hybrid semantic + keyword search over project documents.
         Combines dense embeddings with sparse BM42 keyword matching via RRF,
@@ -943,7 +956,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         return "\n\n".join(parts)
 
     @tool
-    def get_sheet_contents(sheet_number: str, revision_label: str = "", config: Optional[RunnableConfig] = None) -> str:
+    def get_sheet_contents(sheet_number: str, revision_label: str = "", config: Annotated[RunnableConfig, InjectedConfig] = None) -> str:
         """Retrieve ALL chunks for a specific sheet number.
         Use when the user asks 'what is on sheet X?' or wants comprehensive sheet-level information.
         Args:
@@ -1005,7 +1018,7 @@ def _build_shared_components(cfg: "AgentConfig"):
         return "\n".join(parts)
 
     @tool
-    def list_document_map(filters: dict[str, Any] | None = None, config: Optional[RunnableConfig] = None) -> str:
+    def list_document_map(filters: dict[str, Any] | None = None, config: Annotated[RunnableConfig, InjectedConfig] = None) -> str:
         """Retrieves a complete map of the project's documents, sheets, and sections.
         Use this BEFORE generating reports to understand the project structure
         and plan which sections need exhaustive retrieval.
@@ -1137,13 +1150,87 @@ def _build_shared_components(cfg: "AgentConfig"):
         except Exception as e:
             return f"ERROR: Sweep failed: {e}"
 
+    @tool
+    def update_todo(
+        action: str,
+        tasks: list[dict] | None = None,
+        task_id: str = "",
+        status: str = "",
+        note: str = "",
+        text: str = "",
+        config: Annotated[RunnableConfig, InjectedConfig] = None,
+    ) -> str:
+        """Manages the investigation TODO list. Use this to plan, track, and update your work.
+        
+        Actions:
+          - plan: Create initial investigation plan. tasks=[{"text": "Check wall assemblies"}, ...]
+          - add: Add a single new task. text="Verify consultant override for Wall JB"
+          - update: Update task status. task_id="T1", status="done"|"in_progress"|"blocked", note="Found STC 50"
+          - view: View the current TODO state (returns full list)
+        """
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # We determine if it's the Boss or a Sub-agent based on the tool caller context,
+        # but since LangGraph runs the tool natively, we can just log all of them to the shared dict.
+        
+        agent_name = config.get("configurable", {}).get("agent_name", "boss") if config else "boss"
+        
+        if action == "plan":
+            if not tasks:
+                return "Error: tasks list required for plan"
+            todo_ledger.clear()
+            todo_counter["n"] = 0
+            for t in tasks:
+                todo_counter["n"] += 1
+                tid = f"T{todo_counter['n']}"
+                todo_ledger[tid] = {
+                    "text": t.get("text", "Unknown Task"),
+                    "status": "pending",
+                    "notes": [],
+                    "created_at": timestamp,
+                    "agent": agent_name
+                }
+            return f"Plan created with {len(tasks)} tasks."
+            
+        elif action == "add":
+            if not text:
+                return "Error: text required for add"
+            todo_counter["n"] += 1
+            tid = f"T{todo_counter['n']}"
+            todo_ledger[tid] = {
+                "text": text,
+                "status": "pending",
+                "notes": [],
+                "created_at": timestamp,
+                "agent": agent_name
+            }
+            return f"Added new task {tid}: {text}"
+            
+        elif action == "update":
+            if not task_id or task_id not in todo_ledger:
+                return f"Error: Task {task_id} not found."
+            task = todo_ledger[task_id]
+            if status:
+                task["status"] = status
+            if note:
+                task["notes"].append(f"[{timestamp}] {note}")
+            return f"Updated {task_id}."
+            
+        elif action == "view":
+            if not todo_ledger:
+                return "The TODO list is empty."
+            return json.dumps(todo_ledger, indent=2)
+            
+        return f"Error: Unknown action {action}"
+
     direct_tools = [
         list_available_filters, search_documents, get_sheet_contents,
         list_document_map, acoustic_calculator, cross_reference_tracker,
-        cross_scope_sweep
+        cross_scope_sweep, update_todo
     ]
 
-    return direct_tools, assembly_ledger, get_resources
+    return direct_tools, assembly_ledger, get_resources, todo_ledger
 
 
 # ============================================================================
@@ -1215,7 +1302,7 @@ def build_pro_agent(
 
     # ── Build shared components ONCE ──
     print("\n=== [PRO MODE] Initializing shared components... ===")
-    shared_tools, assembly_ledger, get_resources_fn = _build_shared_components(cfg)
+    shared_tools, assembly_ledger, get_resources_fn, todo_ledger = _build_shared_components(cfg)
     print("=== [PRO MODE] Shared components ready. ===\n")
 
     # ── Sub-Agent Tool Factory ──
@@ -1230,6 +1317,7 @@ def build_pro_agent(
                 worker_config = {
                     "configurable": dict((config or {}).get("configurable", {}))
                 }
+                worker_config["configurable"]["agent_name"] = name
                 worker = _build_worker_agent(cfg, persona_prompt, shared_tools)
                 result = worker.invoke(
                     {"messages": [HumanMessage(content=task)]},
@@ -1319,4 +1407,4 @@ def build_pro_agent(
         checkpointer=checkpointer,
     )
 
-    return boss_agent
+    return boss_agent, todo_ledger
